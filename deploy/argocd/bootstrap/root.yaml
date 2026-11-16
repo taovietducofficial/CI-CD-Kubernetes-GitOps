@@ -1,0 +1,23 @@
+# The only Application applied by hand (in `make up`). It points Argo CD at
+# deploy/argocd/apps, and everything else in the cluster follows from there.
+#
+# No resources-finalizer on purpose: deleting this Application must never
+# cascade into deleting the whole platform.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps.git
+    targetRevision: main
+    path: deploy/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

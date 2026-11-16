@@ -1,0 +1,52 @@
+# Values for the argo-cd chart. Used twice, on purpose:
+#  1. `make up` installs Argo CD with them (something has to exist before GitOps can start);
+#  2. the "argocd" Application in apps/platform.yaml then manages Argo CD with the
+#     very same file, so upgrades and config changes go through Git like everything else.
+
+configs:
+  params:
+    # TLS ends at `kubectl port-forward` on a laptop. Behind a real ingress with
+    # a certificate, drop this line.
+    server.insecure: true
+  cm:
+    # Poll Git every 60s instead of 180s. A real setup adds a GitHub webhook
+    # and Argo CD reacts within seconds.
+    timeout.reconciliation: 60s
+    # Argo CD doesn't assess the health of child Applications by default. Without
+    # this, sync waves in the app-of-apps would not wait for Kyverno to be
+    # running before applying policies, or for policies before workloads.
+    resource.customizations.health.argoproj.io_Application: |
+      hs = {}
+      hs.status = "Progressing"
+      hs.message = ""
+      if obj.status ~= nil and obj.status.health ~= nil then
+        hs.status = obj.status.health.status
+        if obj.status.health.message ~= nil then
+          hs.message = obj.status.health.message
+        end
+      end
+      return hs
+
+# Not used in this setup: login is the local admin account, and alerts go
+# through Alertmanager rather than Argo CD notifications.
+dex:
+  enabled: false
+notifications:
+  enabled: false
+
+# Sized for a laptop. Raise on a real cluster.
+controller:
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+repoServer:
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+server:
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+applicationSet:
+  resources:
+    requests: { cpu: 25m, memory: 64Mi }
+redis:
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }

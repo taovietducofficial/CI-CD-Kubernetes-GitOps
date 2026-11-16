@@ -1,0 +1,57 @@
+# One Application per environment that has something released to it.
+# An environment exists in the cluster exactly when deploy/envs/<env>/image.yaml
+# exists in Git: staging appears after the first build on main, production
+# after the first promotion PR is merged.
+#
+# Both environments share this cluster in separate namespaces to keep the demo
+# on one laptop. In real life production is its own cluster: register it in
+# Argo CD and switch to a cluster or matrix generator, nothing else changes.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: demo-service
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps.git
+        revision: main
+        files:
+          - path: deploy/envs/*/image.yaml
+  template:
+    metadata:
+      name: "demo-service-{{ .path.basename }}"
+    spec:
+      project: apps
+      source:
+        repoURL: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps.git
+        targetRevision: main
+        path: deploy/chart
+        helm:
+          releaseName: demo-service
+          valueFiles:
+            - "../envs/{{ .path.basename }}/values.yaml"
+            - "../envs/{{ .path.basename }}/image.yaml"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "app-{{ .path.basename }}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        managedNamespaceMetadata:
+          labels:
+            # Native Pod Security Admission: rejects privileged / root / hostPath pods.
+            pod-security.kubernetes.io/enforce: restricted
+            pod-security.kubernetes.io/enforce-version: latest
+            # Opts the namespace into the Kyverno policies in deploy/policies.
+            workload-namespace: "true"
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          limit: 10
+          backoff: { duration: 10s, factor: 2, maxDuration: 3m }

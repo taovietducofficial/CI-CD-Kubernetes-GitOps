@@ -1,0 +1,202 @@
+# Platform add-ons, installed and upgraded by Argo CD like any other change.
+# Chart versions are pinned; Renovate opens a PR when a new one ships.
+#
+# Sync waves (needs the Application health check from bootstrap/values.yaml):
+#   -1  controllers and their CRDs
+#    0  policies (need Kyverno's CRDs and webhooks)
+#    1  workloads (deploy/argocd/apps/demo-service.yaml)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: platform
+  sources:
+    - repoURL: https://argoproj.github.io/argo-helm
+      chart: argo-cd
+      targetRevision: 10.18.0
+      helm:
+        releaseName: argocd
+        valueFiles:
+          - $values/deploy/argocd/bootstrap/values.yaml
+    - repoURL: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      # Argo CD's own CRDs are too large for client-side apply's annotation.
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo-rollouts
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: platform
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-rollouts
+    targetRevision: 2.43.12
+    helm:
+      valuesObject:
+        dashboard:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argo-rollouts
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: platform
+  source:
+    repoURL: https://kyverno.github.io/kyverno
+    chart: kyverno
+    targetRevision: 3.10.0
+    helm:
+      valuesObject:
+        # Only validation and image verification are used; nothing needs
+        # generate/cleanup rules, so skip those controllers.
+        cleanupController:
+          enabled: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sealed-secrets
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: platform
+  source:
+    repoURL: https://bitnami.github.io/sealed-secrets
+    chart: sealed-secrets
+    targetRevision: 2.22.0
+    helm:
+      valuesObject:
+        # The name kubeseal looks for by default, so `kubeseal` works without flags.
+        fullnameOverride: sealed-secrets-controller
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: metrics-server
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: platform
+  source:
+    repoURL: https://kubernetes-sigs.github.io/metrics-server/
+    chart: metrics-server
+    targetRevision: 3.14.0
+    helm:
+      valuesObject:
+        # kind's kubelets serve self-signed certificates. Never set this on a
+        # real cluster; managed Kubernetes ships metrics-server already.
+        args:
+          - --kubelet-insecure-tls
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kube-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: platform
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 93.3.0
+      helm:
+        # The AnalysisTemplate addresses Prometheus by the service name this produces.
+        releaseName: kube-prometheus-stack
+        valueFiles:
+          - $values/deploy/platform/kube-prometheus-stack.yaml
+    - repoURL: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: policies
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps.git
+    targetRevision: main
+    # Top level only: tests/ holds CLI fixtures, not cluster resources.
+    path: deploy/policies
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    retry:
+      limit: 10
+      backoff: { duration: 10s, factor: 2, maxDuration: 3m }

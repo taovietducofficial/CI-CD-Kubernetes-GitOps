@@ -1,0 +1,56 @@
+# Values for kube-prometheus-stack (see deploy/argocd/apps/platform.yaml).
+
+# kind binds etcd, scheduler, controller-manager and kube-proxy to localhost,
+# so Prometheus can't reach them and would fire TargetDown forever.
+# On a managed cluster the provider usually hides these too.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    # By default the operator only picks up monitors and rules labelled with this
+    # Helm release. Teams ship their PodMonitor/PrometheusRule with their own
+    # chart, so select them from every namespace instead.
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    retention: 3d
+    resources:
+      requests: { cpu: 100m, memory: 512Mi }
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+
+grafana:
+  # The chart's default admin password (prom-operator) is fine for a local
+  # cluster. Anywhere shared: SealedSecret + admin.existingSecret.
+  resources:
+    requests: { cpu: 25m, memory: 128Mi }
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: community
+          folder: Community
+          type: file
+          disableDeletion: true
+          options:
+            path: /var/lib/grafana/dashboards/community
+  dashboards:
+    community:
+      jvm-micrometer:
+        gnetId: 4701
+        revision: 10
+        datasource: Prometheus
+      spring-boot:
+        gnetId: 19004
+        revision: 1
+        datasource: Prometheus
