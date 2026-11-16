@@ -1,0 +1,286 @@
+name: ci
+
+# One pipeline for pull requests and main. On a PR every check runs and nothing
+# is published. On main the exact image that passed the checks is pushed,
+# signed, attested and handed to staging through Git.
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths-ignore:
+      # Release pointers are written by this workflow and by promotion PRs.
+      - deploy/envs/*/image.yaml
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Stale PR runs are cancelled; a run on main is never stopped halfway through publishing.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops
+
+jobs:
+  app:
+    name: app
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Unit and web tests, coverage gate
+        working-directory: app
+        run: ./mvnw -B verify
+      - name: Coverage summary
+        if: always()
+        working-directory: app
+        run: |
+          [ -f target/site/jacoco/jacoco.csv ] || exit 0
+          awk -F, 'NR > 1 { m += $8; c += $9 } END { printf "Line coverage: **%.1f%%**\n", 100 * c / (c + m) }' \
+            target/site/jacoco/jacoco.csv >> "$GITHUB_STEP_SUMMARY"
+
+  codeql:
+    name: codeql
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: java-kotlin
+          build-mode: none
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:java-kotlin
+
+  security:
+    name: security
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.76.2
+      # Dependencies (SCA), committed secrets, and misconfigurations in the
+      # Dockerfile and Helm chart in one pass. The full report goes to the
+      # Security tab; only fixable HIGH/CRITICAL findings fail the build.
+      - name: Trivy filesystem scan (report)
+        run: >
+          trivy fs . --scanners vuln,secret,misconfig
+          --helm-values deploy/chart/ci/test-values.yaml
+          --format sarif --output trivy-fs.sarif
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+      - name: Trivy filesystem scan (gate)
+        run: >
+          trivy fs . --scanners vuln,secret,misconfig
+          --helm-values deploy/chart/ci/test-values.yaml
+          --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+      # Static analysis of these workflow files (injection, over-broad
+      # permissions, unpinned actions...).
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+      - name: New dependencies in this PR
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  deploy-lint:
+    name: deploy-lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: kyverno/action-install-cli@fcee92fca5c883169ef9927acf543e0b5fc58289 # v0.2.0
+        with:
+          # Same version as the Kyverno running in the cluster (chart 3.10.0 in
+          # deploy/argocd/apps/platform.yaml); bump them together.
+          release: v1.20.0
+      # Same target developers run locally: chart lint + schema, kubeconform,
+      # policy unit tests, and the cluster's admission policies applied to the
+      # rendered manifests of every environment.
+      - run: make lint
+
+  build:
+    name: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Built once, saved as a tarball. e2e runs this tarball and publish pushes
+      # this tarball: what was tested is byte-for-byte what ships.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=docker,dest=${{ runner.temp }}/image.tar
+          # Provenance comes from actions/attest in the publish job instead.
+          provenance: false
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.76.2
+      # Scanned before it is pushed: a vulnerable image never reaches the registry.
+      - name: Trivy image scan (gate)
+        run: trivy image --input "$RUNNER_TEMP/image.tar" --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+      - name: SBOM (CycloneDX)
+        run: trivy image --input "$RUNNER_TEMP/image.tar" --format cyclonedx --output "$RUNNER_TEMP/sbom.cdx.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image
+          path: |
+            ${{ runner.temp }}/image.tar
+            ${{ runner.temp }}/sbom.cdx.json
+          retention-days: 1
+
+  e2e:
+    name: e2e
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: ${{ runner.temp }}
+      - name: Deploy to a throwaway kind cluster and smoke test
+        env:
+          IMAGE: ${{ env.IMAGE }}:${{ github.sha }}
+          IMAGE_ARCHIVE: ${{ runner.temp }}/image.tar
+        run: hack/e2e.sh
+
+  publish:
+    name: publish
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [app, codeql, security, deploy-lint, e2e]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+      id-token: write # keyless signing: GitHub OIDC token -> Sigstore certificate
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image
+          path: ${{ runner.temp }}
+      - name: Push the tested image
+        id: push
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          skopeo login ghcr.io --username "$REGISTRY_USER" --password-stdin <<< "$REGISTRY_TOKEN"
+          skopeo copy --digestfile digest.txt \
+            "docker-archive:$RUNNER_TEMP/image.tar" "docker://$IMAGE:$GITHUB_SHA"
+          echo "digest=$(cat digest.txt)" >> "$GITHUB_OUTPUT"
+          echo "Pushed \`$IMAGE:$GITHUB_SHA@$(cat digest.txt)\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: Sign
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "$IMAGE@$DIGEST"
+
+      - name: Attest SLSA build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: Attest SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom.cdx.json
+          push-to-registry: true
+
+      # Check from the outside, the way the cluster will: if this fails, Kyverno
+      # would reject the image anyway, so fail here with a clearer message.
+      - name: Verify signature and provenance
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/.github/workflows/ci.yml@refs/heads/main" \
+            > /dev/null
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/ci.yml" \
+            --predicate-type https://slsa.dev/provenance/v1
+
+  deploy-staging:
+    name: deploy-staging
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment: staging
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This job pushes a commit and uploads no artifacts.
+          persist-credentials: true # zizmor: ignore[artipacked]
+      # GitOps hand-off: CI never talks to the cluster. It records the new
+      # release in Git and Argo CD pulls it from there.
+      - name: Point staging at the new image
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          cat > deploy/envs/staging/image.yaml <<EOF
+          # Written by .github/workflows/ci.yml - do not edit by hand.
+          # Build: $RUN_URL
+          image:
+            tag: $GITHUB_SHA
+            digest: $DIGEST
+          EOF
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/envs/staging/image.yaml
+          git commit -m "deploy(staging): demo-service ${GITHUB_SHA::7}" -m "Build: $RUN_URL"
+          # main may have moved while we were building.
+          git pull --rebase origin main
+          git push origin HEAD:main

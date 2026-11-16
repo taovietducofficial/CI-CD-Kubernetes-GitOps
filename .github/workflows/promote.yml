@@ -1,0 +1,98 @@
+name: promote
+
+# Promotion is a pull request, not a button that deploys. The PR shows the exact
+# digest that will run and every change since the current production release;
+# merging it is the approval, and Argo CD does the rest.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Environment whose release is promoted
+        type: choice
+        options: [staging]
+        default: staging
+      to:
+        description: Target environment
+        type: choice
+        options: [production]
+        default: production
+
+permissions: {}
+
+concurrency:
+  group: promote-${{ inputs.to }}
+  cancel-in-progress: false
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # full history for the changelog
+          # Pushes the promotion branch; uploads no artifacts.
+          persist-credentials: true # zizmor: ignore[artipacked]
+      - name: Open promotion PR
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          src="deploy/envs/$FROM/image.yaml"
+          dst="deploy/envs/$TO/image.yaml"
+          [ -f "$src" ] || { echo "::error::$FROM has no release yet"; exit 1; }
+          if cmp -s "$src" "$dst"; then
+            echo "$TO already runs the same image as $FROM, nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          new=$(awk '/^  tag:/ { print $2 }' "$src")
+          old=$( [ -f "$dst" ] && awk '/^  tag:/ { print $2 }' "$dst" || true)
+          digest=$(awk '/^  digest:/ { print $2 }' "$src")
+          build=$(awk '/^# Build:/ { print $3 }' "$src")
+          branch="promote/$TO-${new::7}"
+
+          {
+            echo "Promotes \`demo-service\` from **$FROM** to **$TO**."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Commit | $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$new |"
+            echo "| Image | \`ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops@$digest\` |"
+            echo "| Build | $build |"
+            echo
+            echo "### Changes since the current $TO release"
+            if [ -n "$old" ]; then
+              git log --no-merges --format='- %h %s (%an)' "$old..$new" -- app deploy/chart
+            else
+              echo "First release to $TO."
+            fi
+            echo
+            echo "### Before merging"
+            echo "- [ ] staging rollout finished Healthy (Argo CD / \`make status\`)"
+            echo "- [ ] no SLO alerts firing for staging"
+            echo
+            echo "Verify the artifact yourself:"
+            echo '```sh'
+            echo "gh attestation verify oci://ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops@$digest --repo $GITHUB_REPOSITORY"
+            echo '```'
+          } > "$RUNNER_TEMP/body.md"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          mkdir -p "$(dirname "$dst")"
+          cp "$src" "$dst"
+          git add "$dst"
+          git commit -m "deploy($TO): promote demo-service ${new::7}"
+          git push --force-with-lease origin "$branch"
+
+          # NOTE: a PR opened with GITHUB_TOKEN doesn't trigger other workflows.
+          # If branch rules require status checks on every PR, open it with a
+          # GitHub App token instead (actions/create-github-app-token).
+          gh pr create --base main --head "$branch" \
+            --title "deploy($TO): promote demo-service ${new::7}" \
+            --body-file "$RUNNER_TEMP/body.md"

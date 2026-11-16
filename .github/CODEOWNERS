@@ -1,0 +1,6 @@
+# Paths that decide what runs in production or what is allowed to run at all.
+# With "Require review from Code Owners" on main, changes here need the owner's approval.
+/deploy/envs/production/  @taovietducofficial
+/deploy/argocd/           @taovietducofficial
+/deploy/policies/         @taovietducofficial
+/.github/                 @taovietducofficial
