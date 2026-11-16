@@ -1,0 +1,72 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests",
+    "docker:pinDigests",
+    ":semanticCommits"
+  ],
+  "timezone": "Asia/Ho_Chi_Minh",
+  "schedule": [
+    "before 9am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
+  "argocd": {
+    "managerFilePatterns": [
+      "/^deploy/argocd/.+\\.yaml$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Platform charts: one PR each, so a bad upgrade can be reverted on its own",
+      "matchManagers": [
+        "argocd"
+      ],
+      "commitMessageTopic": "chart {{depName}}"
+    },
+    {
+      "description": "Action and tool bumps rarely conflict; batch the small ones",
+      "matchManagers": [
+        "github-actions",
+        "custom.regex"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pinDigest"
+      ],
+      "groupName": "ci tooling"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Container images referenced outside Dockerfiles",
+      "managerFilePatterns": [
+        "/^Makefile$/",
+        "/^hack/kind-config.*\\.yaml$/"
+      ],
+      "matchStrings": [
+        "(?<depName>ghcr\\.io/yannh/kubeconform):(?<currentValue>v[0-9.]+)",
+        "(?<depName>curlimages/curl):(?<currentValue>[0-9.]+)",
+        "(?<depName>kindest/node):(?<currentValue>v[0-9.]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Trivy version installed by setup-trivy",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.yml$/"
+      ],
+      "matchStrings": [
+        "setup-trivy@\\S+.*\\n\\s+with:\\n\\s+version: (?<currentValue>v[0-9.]+)"
+      ],
+      "depNameTemplate": "aquasecurity/trivy",
+      "datasourceTemplate": "github-releases"
+    }
+  ]
+}
