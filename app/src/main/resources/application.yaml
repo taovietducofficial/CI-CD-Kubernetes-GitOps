@@ -1,0 +1,57 @@
+spring:
+  application:
+    name: demo-service
+  threads:
+    virtual:
+      enabled: true
+  mvc:
+    problemdetails:
+      enabled: true
+  lifecycle:
+    # Must stay below terminationGracePeriodSeconds in the pod spec.
+    timeout-per-shutdown-phase: 20s
+
+server:
+  port: 8080
+  shutdown: graceful
+
+# Actuator lives on its own port so it is never reachable through the Service
+# that fronts user traffic (NetworkPolicy only lets Prometheus in on 8081).
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+        # Expose /livez and /readyz on the main port as well, so kubelet probes
+        # the server that actually serves traffic, not the management one.
+        add-additional-paths: true
+  info:
+    env:
+      enabled: true
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+    tags:
+      application: ${spring.application.name}
+
+info:
+  app:
+    revision: ${APP_REVISION:local}
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+app:
+  chaos:
+    # Fraction of API requests answered with HTTP 500. Only for demoing
+    # canary analysis; keep it at 0 anywhere real.
+    error-rate: 0
