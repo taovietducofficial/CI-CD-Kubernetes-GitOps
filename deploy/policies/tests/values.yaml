@@ -1,0 +1,15 @@
+apiVersion: cli.kyverno.io/v1alpha1
+kind: Value
+metadata:
+  name: values
+# The CLI has no cluster to read namespace labels from, so declare them here.
+# Also used by `make lint` when applying the policies to the rendered chart.
+namespaceSelector:
+  - name: app-staging
+    labels:
+      workload-namespace: "true"
+  - name: app-production
+    labels:
+      workload-namespace: "true"
+  - name: monitoring
+    labels: {}

@@ -1,0 +1,59 @@
+# Admission check that closes the supply chain: a pod only starts if its image
+#  1. carries a Sigstore signature made by .github/workflows/ci.yml on main, and
+#  2. has a SLSA provenance attestation from the same workflow saying which
+#     repository and ref it was built from.
+# Both are keyless: the identity is the GitHub OIDC token of the workflow run,
+# recorded in the public Rekor transparency log. There is no key to leak.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: verify-image-provenance
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  webhookConfiguration:
+    timeoutSeconds: 20
+  evaluation:
+    background:
+      enabled: false
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        workload-namespace: "true"
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops*"
+  validationConfigurations:
+    required: true
+    verifyDigest: true
+    mutateDigest: true
+  attestors:
+    - name: ci
+      cosign:
+        keyless:
+          identities:
+            - issuer: https://token.actions.githubusercontent.com
+              subject: https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps/.github/workflows/ci.yml@refs/heads/main
+        ctlog:
+          url: https://rekor.sigstore.dev
+  attestations:
+    - name: provenance
+      intoto:
+        type: https://slsa.dev/provenance/v1
+  validations:
+    - expression: >-
+        images.containers.map(image, verifyImageSignatures(image, [attestors.ci])).all(n, n > 0)
+      message: image is not signed by this repository's CI on main
+    - expression: >-
+        images.containers.map(image,
+          verifyAttestationSignatures(image, attestations.provenance, [attestors.ci]) > 0 &&
+          extractPayload(image, attestations.provenance).predicate.buildDefinition.externalParameters.workflow.repository
+            == 'https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps' &&
+          extractPayload(image, attestations.provenance).predicate.buildDefinition.externalParameters.workflow.ref
+            == 'refs/heads/main'
+        ).all(ok, ok)
+      message: image has no SLSA provenance showing it was built from main of this repository

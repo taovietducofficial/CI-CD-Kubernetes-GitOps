@@ -1,0 +1,106 @@
+# Fixtures for kyverno-test.yaml. Each "bad" resource breaks exactly one rule,
+# so a failing test points straight at the rule that regressed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: compliant
+  namespace: app-staging
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops:abc123@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { memory: 512Mi }
+      readinessProbe: { httpGet: { path: /readyz, port: 8080 } }
+      livenessProbe: { httpGet: { path: /livez, port: 8080 } }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-memory-limit
+  namespace: app-staging
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops:abc123@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+      readinessProbe: { httpGet: { path: /readyz, port: 8080 } }
+      livenessProbe: { httpGet: { path: /livez, port: 8080 } }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-probes
+  namespace: app-staging
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops:abc123@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { memory: 512Mi }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: tag-only-image
+  namespace: app-staging
+spec:
+  containers:
+    - name: app
+      image: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops:latest
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { memory: 512Mi }
+      readinessProbe: { httpGet: { path: /readyz, port: 8080 } }
+      livenessProbe: { httpGet: { path: /livez, port: 8080 } }
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: foreign-registry
+  namespace: app-staging
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/nginx@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      resources:
+        requests: { cpu: 100m, memory: 256Mi }
+        limits: { memory: 512Mi }
+      readinessProbe: { httpGet: { path: /, port: 80 } }
+      livenessProbe: { httpGet: { path: /, port: 80 } }
+---
+# Outside workload namespaces the policy doesn't apply at all.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: platform-pod
+  namespace: monitoring
+spec:
+  containers:
+    - name: app
+      image: quay.io/prometheus/prometheus:latest
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: rollout-without-probes
+  namespace: app-staging
+spec:
+  selector:
+    matchLabels: { app: demo }
+  strategy:
+    canary:
+      steps: [{ setWeight: 50 }]
+  template:
+    metadata:
+      labels: { app: demo }
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops:abc123@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
