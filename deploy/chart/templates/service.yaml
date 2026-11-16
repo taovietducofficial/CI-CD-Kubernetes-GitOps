@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "demo.selectorLabels" . | nindent 4 }}
+  # Only the traffic port. Actuator (8081) is scraped pod-by-pod via PodMonitor
+  # and never exposed through the Service.
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

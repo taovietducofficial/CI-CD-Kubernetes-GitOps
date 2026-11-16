@@ -1,0 +1,10 @@
+# Used by `helm lint` / kubeconform / kyverno in CI to exercise every template.
+image:
+  tag: 0123456789abcdef0123456789abcdef01234567
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+autoscaling:
+  enabled: true
+env:
+  APP_CHAOS_ERROR_RATE: "0"
+sealedSecrets:
+  GREETING_API_TOKEN: AgBy3i4OJSWK+PiTySYZZA9rO43cGDEq

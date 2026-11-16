@@ -1,0 +1,11 @@
+# staging: every merge to main lands here automatically.
+replicas: 2
+
+canary:
+  steps:
+    - setWeight: 50
+    - pause: { duration: 1m }
+
+# Chaos switch for the canary-failure demo (`make demo-canary-fail`).
+# env:
+#   APP_CHAOS_ERROR_RATE: "0.5"

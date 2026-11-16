@@ -1,0 +1,23 @@
+# production: changes only through a reviewed promotion PR (see promote.yml).
+replicas: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 384Mi
+  limits:
+    memory: 512Mi
+
+# Smaller first step and longer bakes than staging: production has real traffic,
+# so the analysis has real data to judge.
+canary:
+  steps:
+    - setWeight: 20
+    - pause: { duration: 2m }
+    - setWeight: 50
+    - pause: { duration: 2m }

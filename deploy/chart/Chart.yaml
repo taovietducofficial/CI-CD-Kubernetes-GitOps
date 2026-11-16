@@ -1,0 +1,8 @@
+apiVersion: v2
+name: demo-service
+description: demo-service, delivered by Argo CD and rolled out as a canary by Argo Rollouts.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+# Native preStop "sleep" handler is used because distroless has no shell.
+kubeVersion: ">=1.30.0-0"

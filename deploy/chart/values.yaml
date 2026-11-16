@@ -1,0 +1,54 @@
+# Defaults for every environment. Per-environment overrides live in
+#   deploy/envs/<env>/values.yaml  - configuration, owned by people
+#   deploy/envs/<env>/image.yaml   - which build is running, owned by CI / promotion PRs
+
+image:
+  repository: ghcr.io/taovietducofficial/ci-cd-kubernetes-gitops
+  # Git SHA of the build. Kept for humans reading `kubectl get pods`.
+  tag: ""
+  # What actually selects the image. Tags can be moved, digests cannot.
+  digest: ""
+
+replicas: 2
+
+# CPU limit is left out on purpose: it causes throttling under bursty load and
+# buys nothing on top of the request. Memory limit stays, the JVM sizes its
+# heap from it (-XX:MaxRAMPercentage=75).
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+# Extra environment variables, e.g. APP_CHAOS_ERROR_RATE for the canary demo.
+env: {}
+
+canary:
+  steps:
+    - setWeight: 50
+    - pause: { duration: 1m }
+
+analysis:
+  enabled: true
+  # Minimum share of non-5xx responses the canary must keep.
+  successRate: 0.99
+  prometheusAddress: http://kube-prometheus-stack-prometheus.monitoring.svc:9090
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+monitoring:
+  enabled: true
+
+slo:
+  # 99.9% of API requests succeed over 30 days -> 43 minutes of error budget.
+  availabilityTarget: 0.999
+  latencyP99Seconds: 0.3
+
+# Encrypted with `make seal` (kubeseal --raw). Safe to commit: only the
+# sealed-secrets controller in the target cluster can decrypt it.
+sealedSecrets: {}

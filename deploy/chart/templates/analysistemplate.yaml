@@ -1,0 +1,29 @@
+{{- if .Values.analysis.enabled }}
+{{- $selector := printf "namespace=%q, rollouts_pod_template_hash=\"{{args.canary-hash}}\", uri=~\"/api/.+\"" .Release.Namespace }}
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: {{ .Release.Name }}-success-rate
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+spec:
+  args:
+    - name: canary-hash
+  metrics:
+    - name: success-rate
+      interval: 30s
+      # Give Prometheus a couple of scrapes of the new pods before judging.
+      initialDelay: 30s
+      failureLimit: 1
+      # An empty result or NaN means the canary has had no API traffic yet:
+      # that's "no evidence", not "failure".
+      successCondition: "len(result) == 0 || isNaN(result[0]) || result[0] >= {{ .Values.analysis.successRate }}"
+      provider:
+        prometheus:
+          address: {{ .Values.analysis.prometheusAddress }}
+          query: |
+            sum(rate(http_server_requests_seconds_count{ {{- $selector }}, status!~"5.."}[1m]))
+            /
+            sum(rate(http_server_requests_seconds_count{ {{- $selector }}}[1m]))
+{{- end }}

@@ -1,0 +1,111 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "demo.selectorLabels" . | nindent 6 }}
+  strategy:
+    canary:
+      {{- if .Values.analysis.enabled }}
+      # Runs in the background from the first step until the rollout finishes;
+      # a failed measurement aborts the rollout and scales the canary away.
+      analysis:
+        templates:
+          - templateName: {{ .Release.Name }}-success-rate
+        args:
+          - name: canary-hash
+            valueFrom:
+              podTemplateHashValue: Latest
+      {{- end }}
+      steps:
+        {{- toYaml .Values.canary.steps | nindent 8 }}
+  template:
+    metadata:
+      labels:
+        {{- include "demo.selectorLabels" . | nindent 8 }}
+      {{- with .Values.sealedSecrets }}
+      annotations:
+        # Secret values are read at startup, so a change has to roll the pods.
+        checksum/secrets: {{ toJson . | sha256sum }}
+      {{- end }}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "demo.selectorLabels" . | nindent 14 }}
+      containers:
+        - name: app
+          image: {{ include "demo.image" . }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: management
+              containerPort: 8081
+          env:
+            - name: APP_REVISION
+              value: {{ .Values.image.tag | quote }}
+            {{- range $name, $value := .Values.env }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if .Values.sealedSecrets }}
+          envFrom:
+            - secretRef:
+                name: {{ .Release.Name }}
+          {{- end }}
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+          lifecycle:
+            # Endpoints are removed asynchronously; keep serving for a few
+            # seconds so in-flight connections aren't routed to a dead pod.
+            preStop:
+              sleep:
+                seconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

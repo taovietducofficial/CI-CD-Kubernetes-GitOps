@@ -1,0 +1,71 @@
+{{- if .Values.monitoring.enabled }}
+{{- $ns := .Release.Namespace }}
+{{- $budget := printf "(1 - %v)" .Values.slo.availabilityTarget }}
+{{- $runbook := "https://github.com/taovietducofficial/CI-CD-Kubernetes-GitOps/blob/main/docs/runbooks.md" }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-slo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "demo.labels" . | nindent 4 }}
+spec:
+  groups:
+    # SLI: share of API requests answered with 5xx. Probes and actuator are excluded,
+    # they say nothing about what users experience.
+    - name: demo-service.slo.recording
+      rules:
+        {{- range $window := list "5m" "30m" "1h" "6h" }}
+        - record: slo:demo_service_errors:ratio_rate{{ $window }}
+          expr: |
+            sum(rate(http_server_requests_seconds_count{namespace="{{ $ns }}", uri=~"/api/.+", status=~"5.."}[{{ $window }}]))
+            /
+            sum(rate(http_server_requests_seconds_count{namespace="{{ $ns }}", uri=~"/api/.+"}[{{ $window }}]))
+          labels:
+            namespace: {{ $ns }}
+        {{- end }}
+
+    # Multi-window, multi-burn-rate alerts (Google SRE Workbook, ch. 5).
+    # The long window proves the burn is significant, the short one proves it is
+    # still happening, so the alert resolves quickly once the problem is fixed.
+    - name: demo-service.slo.alerts
+      rules:
+        - alert: DemoServiceErrorBudgetBurnFast
+          expr: |
+            slo:demo_service_errors:ratio_rate1h{namespace="{{ $ns }}"} > (14.4 * {{ $budget }})
+            and
+            slo:demo_service_errors:ratio_rate5m{namespace="{{ $ns }}"} > (14.4 * {{ $budget }})
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: demo-service ({{ $ns }}) is burning its error budget 14x faster than allowed
+            description: {{`5xx ratio over the last hour is {{ $value | humanizePercentage }}; at this pace the 30-day budget is gone in about two days.`}}
+            runbook_url: {{ $runbook }}#demoserviceerrorbudgetburnfast
+
+        - alert: DemoServiceErrorBudgetBurnSlow
+          expr: |
+            slo:demo_service_errors:ratio_rate6h{namespace="{{ $ns }}"} > (6 * {{ $budget }})
+            and
+            slo:demo_service_errors:ratio_rate30m{namespace="{{ $ns }}"} > (6 * {{ $budget }})
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: demo-service ({{ $ns }}) is steadily burning its error budget
+            description: {{`5xx ratio over the last 6 hours is {{ $value | humanizePercentage }}; the budget runs out in about five days.`}}
+            runbook_url: {{ $runbook }}#demoserviceerrorbudgetburnslow
+
+        - alert: DemoServiceLatencyHigh
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(http_server_requests_seconds_bucket{namespace="{{ $ns }}", uri=~"/api/.+"}[5m]))
+            ) > {{ .Values.slo.latencyP99Seconds }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: demo-service ({{ $ns }}) p99 latency is above {{ .Values.slo.latencyP99Seconds }}s
+            description: {{`p99 over the last 5 minutes is {{ $value | humanizeDuration }}.`}}
+            runbook_url: {{ $runbook }}#demoservicelatencyhigh
+{{- end }}
