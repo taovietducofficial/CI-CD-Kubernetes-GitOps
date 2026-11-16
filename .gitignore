@@ -1,0 +1,11 @@
+# build output
+target/
+.out/
+*.tar
+sbom*.json
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store

@@ -1,0 +1,5 @@
+# Shell scripts and mvnw must keep LF even when cloned on Windows,
+# otherwise they fail in Linux containers and CI with "bad interpreter".
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.jar binary
