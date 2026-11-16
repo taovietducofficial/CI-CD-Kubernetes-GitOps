@@ -1,4 +1,5 @@
-# Single-node variant for machines with ~4 GB available to Docker.
+# Single node: used by hack/e2e.sh, and by `make up` when memory is tight
+# (saves the two workers' overhead; the full platform still wants ~8 GB).
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: gitops

@@ -50,7 +50,7 @@ Chi tiết hơn (pipeline, sequence diagram, chuỗi tin cậy, threat model) n�
 
 ### Yêu cầu
 
-- Docker cấp được khoảng **8 GB RAM** (máy chỉ có 4 GB thì dùng `KIND_CONFIG=hack/kind-config-single.yaml`).
+- Docker cấp được **8 GB RAM** trở lên. Toàn bộ nền tảng (Argo CD, Kyverno, Prometheus/Grafana, Rollouts, hai môi trường JVM) đã được thử với Docker 4 GB và **không đủ**: control plane bị crash. Bản 1 node (`KIND_CONFIG=hack/kind-config-single.yaml`) chỉ bớt được phần overhead của hai node worker. Máy yếu hơn vẫn chạy được `make test`, `make lint` và `make e2e`.
 - [kind](https://kind.sigs.k8s.io/), [kubectl](https://kubernetes.io/docs/tasks/tools/), [helm](https://helm.sh/) ≥ 3.14, `make`, `bash`.
 - Tuỳ chọn: [kyverno CLI](https://kyverno.io/docs/kyverno-cli/) cho `make lint`, [kubeseal](https://github.com/bitnami-labs/sealed-secrets#kubeseal) cho `make seal`, plugin [kubectl argo rollouts](https://argo-rollouts.readthedocs.io/en/stable/installation/#kubectl-plugin-installation).
 - Windows: dùng **Git Bash** hoặc **WSL2**.

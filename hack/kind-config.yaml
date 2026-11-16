@@ -1,7 +1,7 @@
 # Local cluster for `make up`. Two workers so PodDisruptionBudgets and
 # topology spread actually have somewhere to spread to.
-# Needs ~8 GB of memory for Docker. On a smaller machine:
-#   KIND_CONFIG=hack/kind-config-single.yaml make up
+# Needs 8 GB of memory for Docker. hack/kind-config-single.yaml saves the
+# worker overhead but the platform itself still doesn't fit in 4 GB.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: gitops
